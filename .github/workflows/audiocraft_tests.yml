@@ -25,12 +25,13 @@ jobs:
           - labels: [self-hosted, Linux, X64, cuda-3090-24gb]
             friendly_name: "Python 3.10 CUDA 12.3.2 Torch-TensorRT 2.2.0a0"
             container: "nvcr.io/nvidia/pytorch:23.12-py3"
+            # cuda 11.8 isn't really a supported platform with torch 2.2 on NVIDIA
     steps:
       - run: |
           curl -LsSf https://astral.sh/uv/install.sh | sh
         name: Install uv
       - run: |
-          apt install libsndfile1-dev ffmpeg -y
+          apt update && apt install libsndfile1-dev ffmpeg -y
         name: Install system dependencies
       - uses: actions/checkout@v4
         name: Checkout git repo
@@ -40,7 +41,8 @@ jobs:
           export UV_SYSTEM_PYTHON=true
           
           ( [[ "$(uv pip freeze | awk -F'[=.]' '/^numpy==/ {print $3}')" -lt 2 ]] && echo "numpy<2" || echo "numpy>=2" ) >> numpy_override.txt
-          uv pip install -U $(cat numpy_override.txt)
+          # numba should also be upgraded to ensure numpy compatibility
+          uv pip install -U numba $(cat numpy_override.txt)
       - name: Install audiocraft
         run: |
           export UV_BREAK_SYSTEM_PACKAGES=true
@@ -53,4 +55,5 @@ jobs:
           make tests
       - name: Run integration tests
         run: |
+          export USER=root
           make tests_integ

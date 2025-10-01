@@ -3,31 +3,40 @@
 ![linter badge](https://github.com/facebookresearch/audiocraft/workflows/audiocraft_linter/badge.svg)
 ![tests badge](https://github.com/facebookresearch/audiocraft/workflows/audiocraft_tests/badge.svg)
 
+This fork makes `audiocraft` installable easily by other packages, tests on various versions of modern `torch`, and removes the dependency on `xformers`, making it compatible with **macOS**.
+
 AudioCraft is a PyTorch library for deep learning research on audio generation. AudioCraft contains inference and training code
 for two state-of-the-art AI generative models producing high-quality audio: AudioGen and MusicGen.
 
 
 ## Installation
-AudioCraft requires Python 3.9, PyTorch 2.1.0. To install AudioCraft, you can run the following:
+
+Install `uv`. Then:
 
 ```shell
-# Best to make sure you have torch installed first, in particular before installing xformers.
-# Don't run this if you already have PyTorch installed.
-python -m pip install 'torch==2.1.0'
-# You might need the following before trying to install the packages
-python -m pip install setuptools wheel
-# Then proceed to one of the following
-python -m pip install -U audiocraft  # stable release
-python -m pip install -U git+https://git@github.com/facebookresearch/audiocraft#egg=audiocraft  # bleeding edge
-python -m pip install -e .  # or if you cloned the repo locally (mandatory if you want to train).
-python -m pip install -e '.[wm]'  # if you want to train a watermarking model
+uv pip install --torch-backend=auto "audiocraft[dev,wm]@git+https://git@github.com/facebookresearch/audiocraft"
 ```
 
 We also recommend having `ffmpeg` installed, either through your system or Anaconda:
+
+**Linux**:
+
 ```bash
-sudo apt-get install ffmpeg
-# Or if you are using Anaconda or Miniconda
-conda install "ffmpeg<5" -c conda-forge
+sudo apt install ffmpeg -y
+```
+
+**macOS**:
+
+```shell
+brew install ffmpeg
+```
+
+**Windows**:
+
+Install Chocolatey. Then:
+
+```shell
+choco install -y ffmpeg
 ```
 
 ## Models

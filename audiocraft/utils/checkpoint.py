@@ -3,7 +3,8 @@
 #
 # This source code is licensed under the license found in the
 # LICENSE file in the root directory of this source tree.
-
+import collections
+import typing
 from enum import Enum
 import logging
 from pathlib import Path
@@ -11,6 +12,7 @@ import re
 import typing as tp
 
 import flashy
+import omegaconf
 import torch
 
 from ..environment import AudioCraftEnvironment
@@ -90,7 +92,21 @@ def load_checkpoint(checkpoint_path: Path, is_sharded: bool = False) -> tp.Any:
         rank0_checkpoint_path = checkpoint_path.parent / checkpoint_name(use_fsdp=False)
         if rank0_checkpoint_path.exists():
             check_sharded_checkpoint(checkpoint_path, rank0_checkpoint_path)
-    state = torch.load(checkpoint_path, 'cpu')
+    with torch.serialization.safe_globals([
+        omegaconf.dictconfig.DictConfig,
+        omegaconf.base.ContainerMetadata,
+        typing.Any,
+        dict,
+        collections.defaultdict,
+        omegaconf.nodes.AnyNode,
+        omegaconf.base.Metadata,
+        omegaconf.listconfig.ListConfig,
+        list,
+        int,
+        str,
+        float
+    ]):
+        state = torch.load(checkpoint_path, 'cpu')
     logger.info("Checkpoint loaded from %s", checkpoint_path)
     return state
 
