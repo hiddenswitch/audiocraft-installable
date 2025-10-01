@@ -1,5 +1,6 @@
 name: audiocraft_tests
 on:
+  workflow_dispatch: {}
   push:
     branches: [ main ]
 
