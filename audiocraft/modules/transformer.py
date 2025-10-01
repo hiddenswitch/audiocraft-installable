@@ -5,8 +5,8 @@
 # LICENSE file in the root directory of this source tree.
 
 """
-Transformer model, with streaming support, xformer attention support
-and easy causal attention with a potentially finite receptive field.
+Transformer model, with streaming support, and easy causal attention
+with a potentially finite receptive field.
 
 See `StreamingTransformer` for more information.
 
@@ -20,35 +20,23 @@ import torch
 import torch.nn as nn
 from torch.nn import functional as F
 from torch.utils.checkpoint import checkpoint as torch_checkpoint
-from xformers import ops
 
 from .rope import RotaryEmbedding
 from .streaming import StreamingModule
 
-_efficient_attention_backend: str = 'torch'
 
-
-def set_efficient_attention_backend(backend: str = 'torch'):
-    # Using torch by default, it seems a bit faster on older P100 GPUs (~20% faster).
-    global _efficient_attention_backend
-    assert _efficient_attention_backend in ['xformers', 'torch']
-    _efficient_attention_backend = backend
+def set_efficient_attention_backend(*args):
+    # todo: deprecated, never delete
+    pass
 
 
 def _get_attention_time_dimension(memory_efficient: bool) -> int:
-    if _efficient_attention_backend == 'torch' and memory_efficient:
+    # Starting with torch 2.0, memory efficient attention requires B, H, T, D
+    # where T is the time dimension.
+    if memory_efficient:
         return 2
     else:
         return 1
-
-
-def _is_profiled() -> bool:
-    # Return true if we are currently running with a xformers profiler activated.
-    try:
-        from xformers.profiler import profiler
-    except ImportError:
-        return False
-    return profiler._Profiler._CURRENT_PROFILER is not None
 
 
 def create_norm_fn(norm_type: str, dim: int, **kwargs) -> nn.Module:
@@ -93,7 +81,7 @@ def expand_repeated_kv(x: torch.Tensor, n_rep: int, memory_efficient: bool) -> t
     """torch.repeat_interleave(x, dim=2, repeats=n_rep) from xlformers."""
     if n_rep == 1:
         return x
-    if _efficient_attention_backend == 'torch' and memory_efficient:
+    if memory_efficient:
         bs, n_kv_heads, slen, head_dim = x.shape
         return (
             x[:, :, None, :, :]
@@ -120,6 +108,7 @@ class LayerScale(nn.Module):
         device (torch.device or str, optional): Device on which to initialize the module.
         dtype (torch.dtype, optional): dtype to use to initialize the module.
     """
+
     def __init__(self, channels: int, init: float = 1e-4, channel_last: bool = True,
                  device=None, dtype=None):
         super().__init__()
@@ -146,7 +135,7 @@ class StreamingMultiheadAttention(StreamingModule):
         causal (bool): Causal mask applied automatically.
         past_context (int, optional): Receptive field for the causal mask, infinite if None.
         custom (bool): Use custom MHA implementation, for testing / benchmarking.
-        memory_efficient (bool): Use xformers based memory efficient attention.
+        memory_efficient (bool): Use memory efficient attention implementation.
         attention_as_float32 (bool): Perform the attention as float32
             (especially important with memory_efficient as autocast won't do this automatically).
         rope (`RotaryEmbedding`, optional): Rope embedding to use.
@@ -161,6 +150,7 @@ class StreamingMultiheadAttention(StreamingModule):
         device (torch.device, optional): Device on which to initialize.
         dtype (torch.dtype, optional): dtype to use.
     """
+
     def __init__(self, embed_dim: int, num_heads: int, dropout: float = 0.0, bias: bool = True,
                  causal: bool = False, past_context: tp.Optional[int] = None, custom: bool = False,
                  memory_efficient: bool = False, attention_as_float32: bool = False,
@@ -186,9 +176,6 @@ class StreamingMultiheadAttention(StreamingModule):
         if cross_attention:
             assert not causal, "Causal cannot work with cross attention."
             assert rope is None, "Rope cannot work with cross attention."
-
-        if memory_efficient:
-            _verify_xformers_memory_efficient_compat()
 
         self.custom = _is_custom(custom, memory_efficient)
         if self.custom:
@@ -235,16 +222,6 @@ class StreamingMultiheadAttention(StreamingModule):
         # We actually return a bias for the attention score, as this has the same
         # convention both in the builtin MHA in Pytorch, and Xformers functions.
         time_dim = _get_attention_time_dimension(self.memory_efficient)
-        if self.memory_efficient:
-            from xformers.ops import LowerTriangularMask
-            if current_steps == 1:
-                # If we only have one step, then we do not need a mask.
-                return None
-            elif 'past_keys' in self._streaming_state:
-                raise RuntimeError("Not supported at the moment")
-            else:
-                # Then we can safely use a lower triangular mask
-                return LowerTriangularMask()
         if self._streaming_state:
             past_keys = self._streaming_state['past_keys']
             past_steps = past_keys.shape[time_dim]
@@ -288,9 +265,12 @@ class StreamingMultiheadAttention(StreamingModule):
         if self.past_context is not None:
             offset = max(0, nk.shape[time_dim] - self.past_context)
         if self._is_streaming:
-            self._streaming_state['past_keys'] = nk[:, offset:]
+            # Correctly slice the tensor based on time_dim
+            slices = [slice(None)] * nk.ndim
+            slices[time_dim] = slice(offset, None)
+            self._streaming_state['past_keys'] = nk[tuple(slices)]
             if v is not k:
-                self._streaming_state['past_values'] = nv[:, offset:]
+                self._streaming_state['past_values'] = nv[tuple(slices)]
             if 'offset' in self._streaming_state:
                 self._streaming_state['offset'] += offset
             else:
@@ -302,7 +282,7 @@ class StreamingMultiheadAttention(StreamingModule):
         # Apply rope embeddings to query and key tensors.
         assert self.rope is not None
         if 'past_keys' in self._streaming_state:
-            past_keys_offset = self._streaming_state['past_keys'].shape[1]
+            past_keys_offset = self._streaming_state['past_keys'].shape[time_dim]
         else:
             past_keys_offset = 0
         if 'offset' in self._streaming_state:
@@ -329,13 +309,20 @@ class StreamingMultiheadAttention(StreamingModule):
                 "Streaming only available for causal or cross attention"
 
         custom_attn_mask = attn_mask is not None
+        use_causal_flag = False
 
         if self.causal:
-            assert attn_mask is None
+            assert not custom_attn_mask, "Cannot provide a mask when causal is True."
             # At the moment we specialize only for the self-attention case.
             assert query.shape[1] == key.shape[1], "Causal only for same length query / key / value"
             assert value.shape[1] == key.shape[1], "Causal only for same length query / key / value"
-            attn_mask = self._get_mask(query.shape[1], query.device, query.dtype)
+            # We can use is_causal flag if no past_context and not streaming
+            can_use_is_causal = self.past_context is None and not self._is_streaming
+            if self.memory_efficient and can_use_is_causal:
+                use_causal_flag = True
+                attn_mask = None
+            else:
+                attn_mask = self._get_mask(query.shape[1], query.device, query.dtype)
 
         if self.custom:
             # custom implementation
@@ -360,10 +347,8 @@ class StreamingMultiheadAttention(StreamingModule):
                     k = self.k_layer_norm(k)
                 q, k, v = [rearrange(x, f"b t (h d) -> {layout}", h=self.num_heads) for x in [q, k, v]]
             else:
-                if not _is_profiled():
-                    # profiling breaks that propertysomehow.
-                    assert query is key, "specialized implementation"
-                    assert value is key, "specialized implementation"
+                assert query is key, "specialized implementation"
+                assert value is key, "specialized implementation"
                 projected = nn.functional.linear(query, self.in_proj_weight, self.in_proj_bias)
                 if self.kv_repeat == 1:
                     if time_dim == 2:
@@ -371,7 +356,7 @@ class StreamingMultiheadAttention(StreamingModule):
                     else:
                         bound_layout = "b t p h d"
                     packed = rearrange(projected, f"b t (p h d) -> {bound_layout}", p=3, h=self.num_heads)
-                    q, k, v = ops.unbind(packed, dim=2)
+                    q, k, v = torch.unbind(packed, dim=2)
                 else:
                     embed_dim = self.embed_dim
                     per_head_dim = (embed_dim // self.num_heads)
@@ -400,20 +385,9 @@ class StreamingMultiheadAttention(StreamingModule):
             if self.attention_as_float32:
                 q, k, v = [x.float() for x in [q, k, v]]
             if self.memory_efficient:
-                if custom_attn_mask:
-                    # When using a custom attn mask:
-                    # Move to query's device, repeat for each sample, remove align8 padding
-                    seq_len = query.shape[1]
-                    attn_mask = attn_mask.to(q.dtype)
-                    attn_mask = attn_mask.repeat((q.shape[0], 1, 1, 1))
-                    attn_mask = attn_mask[..., :seq_len, :seq_len]
-
                 p = self.dropout if self.training else 0
-                if _efficient_attention_backend == 'torch':
-                    x = torch.nn.functional.scaled_dot_product_attention(
-                        q, k, v, is_causal=attn_mask is not None, dropout_p=p)
-                else:
-                    x = ops.memory_efficient_attention(q, k, v, attn_mask, p=p)
+                x = torch.nn.functional.scaled_dot_product_attention(
+                    q, k, v, attn_mask=attn_mask, is_causal=use_causal_flag, dropout_p=p)
             else:
                 # We include the dot product as float32, for consistency
                 # with the other implementations that include that step
@@ -466,7 +440,7 @@ class StreamingTransformerLayer(nn.TransformerEncoderLayer):
         causal (bool): Causal mask applied automatically.
         past_context (int, optional): Receptive field for the causal mask, infinite if None.
         custom (bool): Use custom MHA implementation, for testing / benchmarking.
-        memory_efficient (bool): Use xformers based memory efficient attention.
+        memory_efficient (bool): Use memory efficient attention implementation.
         attention_as_float32 (bool): Perform the attention as float32
             (especially important with memory_efficient as autocast won't do this automatically).
         qk_layer_norm (bool): Layer normalization applied to queries and keys before dot product in attention.
@@ -485,6 +459,7 @@ class StreamingTransformerLayer(nn.TransformerEncoderLayer):
         dtype (torch.dtype, optional): dtype to use.
         **kwargs: See `nn.TransformerEncoderLayer`.
     """
+
     def __init__(self, d_model: int, num_heads: int, dim_feedforward: int = 2048, dropout: float = 0.1,
                  bias_ff: bool = True, bias_attn: bool = True, causal: bool = False,
                  past_context: tp.Optional[int] = None, custom: bool = False,
@@ -587,7 +562,7 @@ class StreamingTransformer(StreamingModule):
         causal (bool): Causal mask applied automatically.
         past_context (int, optional): Receptive field for the causal mask, infinite if None.
         custom (bool): Use custom MHA implementation, for testing / benchmarking.
-        memory_efficient (bool): Use xformers based memory efficient attention.
+        memory_efficient (bool): Use memory efficient attention implementation.
         attention_as_float32 (bool): Perform the attention as float32
             (especially important with memory_efficient as autocast won't do this automatically).
         cross_attention (bool): If True, expect to get secondary input for cross-attention.
@@ -604,13 +579,12 @@ class StreamingTransformer(StreamingModule):
         checkpointing (str): Checkpointing strategy to reduce memory usage.
             No checkpointing if set to 'none'. Per layer checkpointing using PyTorch
             if set to 'torch' (entire layer checkpointed, i.e. linears are evaluated twice,
-            minimal memory usage, but maximal runtime). Finally, `xformers_default` provide
-            a policy for opting-out some operations of the checkpointing like
-            linear layers and attention, providing a middle ground between speed and memory.
+            minimal memory usage, but maximal runtime).
         device (torch.device, optional): Device on which to initialize.
         dtype (torch.dtype, optional): dtype to use.
         **kwargs: See `nn.TransformerEncoderLayer`.
     """
+
     def __init__(self, d_model: int, num_heads: int, num_layers: int, dim_feedforward: int = 2048,
                  dropout: float = 0.1, bias_ff: bool = True, bias_attn: bool = True,
                  causal: bool = False, past_context: tp.Optional[int] = None,
@@ -638,9 +612,7 @@ class StreamingTransformer(StreamingModule):
 
         self.checkpointing = checkpointing
 
-        assert checkpointing in ['none', 'torch', 'xformers_default', 'xformers_mm']
-        if self.checkpointing.startswith('xformers'):
-            _verify_xformers_internal_compat()
+        assert checkpointing in ['none', 'torch']
 
         self.layers = nn.ModuleList()
         for idx in range(num_layers):
@@ -665,28 +637,6 @@ class StreamingTransformer(StreamingModule):
             return layer(*args, **kwargs)
         elif method == 'torch':
             return torch_checkpoint(layer, *args, use_reentrant=False, **kwargs)
-        elif method.startswith('xformers'):
-            from xformers.checkpoint_fairinternal import checkpoint, _get_default_policy
-            if method == 'xformers_default':
-                # those operations will be saved, and not recomputed.
-                # According to Francisco we can get smarter policies but this is a good start.
-                allow_list = [
-                    "xformers.efficient_attention_forward_cutlass.default",
-                    "xformers_flash.flash_fwd.default",
-                    "aten.addmm.default",
-                    "aten.mm.default",
-                ]
-            elif method == 'xformers_mm':
-                # those operations will be saved, and not recomputed.
-                # According to Francisco we can get smarter policies but this is a good start.
-                allow_list = [
-                    "aten.addmm.default",
-                    "aten.mm.default",
-                ]
-            else:
-                raise ValueError(f"xformers checkpointing xformers policy {method} is not known.")
-            policy_fn = _get_default_policy(allow_list)
-            return checkpoint(layer, *args, policy_fn=policy_fn, **kwargs)
         else:
             raise ValueError(f"Checkpointing method {method} is unknown.")
 
@@ -722,34 +672,5 @@ class StreamingTransformer(StreamingModule):
 
 
 # special attention related function
-
-def _verify_xformers_memory_efficient_compat():
-    try:
-        from xformers.ops import memory_efficient_attention, LowerTriangularMask  # noqa
-    except ImportError:
-        raise ImportError(
-            "xformers is not installed. Please install it and try again.\n"
-            "To install on AWS and Azure, run \n"
-            "FORCE_CUDA=1 TORCH_CUDA_ARCH_LIST='8.0'\\\n"
-            "pip install -U git+https://git@github.com/fairinternal/xformers.git#egg=xformers\n"
-            "To install on FAIR Cluster, run \n"
-            "FORCE_CUDA=1 TORCH_CUDA_ARCH_LIST='6.0;7.0'\\\n"
-            "pip install -U git+https://git@github.com/fairinternal/xformers.git#egg=xformers\n")
-
-
-def _verify_xformers_internal_compat():
-    try:
-        from xformers.checkpoint_fairinternal import checkpoint, _get_default_policy  # noqa
-    except ImportError:
-        raise ImportError(
-            "Francisco's fairinternal xformers is not installed. Please install it and try again.\n"
-            "To install on AWS and Azure, run \n"
-            "FORCE_CUDA=1 TORCH_CUDA_ARCH_LIST='8.0'\\\n"
-            "pip install -U git+https://git@github.com/fairinternal/xformers.git#egg=xformers\n"
-            "To install on FAIR Cluster, run \n"
-            "FORCE_CUDA=1 TORCH_CUDA_ARCH_LIST='6.0;7.0'\\\n"
-            "pip install -U git+https://git@github.com/fairinternal/xformers.git#egg=xformers\n")
-
-
 def _is_custom(custom: bool, memory_efficient: bool):
     return custom or memory_efficient

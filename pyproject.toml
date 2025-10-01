@@ -1,0 +1,107 @@
+[project]
+name = "audiocraft"
+# don't automate stuff like the version
+# it introduces needless, complex toil to packaging
+# you will literally never screw up maintaining the version
+version = "1.4.0a2"
+description = "Audio generation research library for PyTorch"
+readme = "README.md"
+requires-python = ">=3.9.0"
+license = { text = "MIT License" }
+authors = [
+  { name = "FAIR Speech & Audio", email = "defossez@meta.com, jadecopet@meta.com" },
+]
+dependencies = [
+  "av",
+  "einops",
+  "flashy>=0.0.1",
+  "hydra-core>=1.1",
+  "hydra_colorlog",
+  "julius",
+  "num2words",
+  "numpy",
+  "sentencepiece",
+  "spacy>=3.7.6,<4",
+  "torch",
+  "torchaudio",
+  "huggingface_hub",
+  "tqdm",
+  "transformers>=4.31.0",
+  "demucs",
+  "librosa",
+  "soundfile",
+  "gradio",
+  "torchmetrics",
+  "encodec",
+  "protobuf",
+  "torchvision",
+  "torchtext",
+  "pesq",
+  "pystoi",
+  "torchdiffeq",
+]
+classifiers = [
+  'License :: OSI Approved :: MIT License',
+  'Topic :: Multimedia :: Sound/Audio',
+  'Topic :: Scientific/Engineering :: Artificial Intelligence',
+]
+
+[project.urls]
+"Homepage" = "https://github.com/facebookresearch/audiocraft"
+
+[project.optional-dependencies]
+dev = [
+  "coverage",
+  "flake8",
+  "Flake8-pyproject",
+  "mypy",
+  "pdoc3",
+  "pytest"
+]
+wm = [
+  "audioseal"
+]
+
+[tool.uv.build-backend]
+module-name = "audiocraft"
+module-root = ""
+
+[build-system]
+requires = ["uv_build>=0.8.22,<0.9.0"]
+build-backend = "uv_build"
+
+[tool.flake8]
+max-line-length = 120
+
+[tool.coverage.report]
+include = ["audiocraft/*"]
+omit = [
+  "audiocraft/environment.py",
+  "audiocraft/solvers/*",
+  "audiocraft/utils/*",
+  "audiocraft/*/loaders.py",
+  "audiocraft/*/builders.py",
+]
+
+[tool.mypy]
+[[tool.mypy.overrides]]
+module = [
+  "av.*",
+  "demucs.*",
+  "einops.*",
+  "flashy.*",
+  "huggingface_hub",
+  "hydra",
+  "num2words.*",
+  "pesq",
+  "scipy",
+  "soundfile",
+  "spacy",
+  "torchmetrics.*",
+  "torchaudio.*",
+  "tqdm.*",
+  "transformers",
+  "treetable",
+  "xformers.*",
+]
+ignore_missing_imports = true
