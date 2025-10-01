@@ -55,7 +55,7 @@ def _av_info(filepath: tp.Union[str, Path]) -> AudioFileInfo:
 
 
 def _soundfile_info(filepath: tp.Union[str, Path]) -> AudioFileInfo:
-    info = soundfile.info(filepath)
+    info = soundfile.info(str(filepath))
     return AudioFileInfo(info.samplerate, info.duration, info.channels)
 
 
@@ -131,7 +131,7 @@ def audio_read(filepath: tp.Union[str, Path], seek_time: float = 0.,
         info = _soundfile_info(filepath)
         frames = -1 if duration <= 0 else int(duration * info.sample_rate)
         frame_offset = int(seek_time * info.sample_rate)
-        wav, sr = soundfile.read(filepath, start=frame_offset, frames=frames, dtype=np.float32)
+        wav, sr = soundfile.read(str(filepath), start=frame_offset, frames=frames, dtype=np.float32)
         assert info.sample_rate == sr, f"Mismatch of sample rates {info.sample_rate} {sr}"
         wav = torch.from_numpy(wav).t().contiguous()
         if len(wav.shape) == 1:
@@ -215,7 +215,7 @@ def audio_write(stem_name: tp.Union[str, Path],
         suffix = '.flac'
         flags = ['-f', 'flac']
     else:
-        raise RuntimeError(f"Invalid format {format}. Only wav or mp3 are supported.")
+        raise RuntimeError(f"Invalid format {format}. Only wav, mp3, ogg, and flac are supported.")
     if not add_suffix:
         suffix = ''
     path = Path(str(stem_name) + suffix)

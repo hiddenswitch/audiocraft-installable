@@ -16,7 +16,7 @@ class TestWatermarkModel:
         sr = 16_000
         duration = 1.0
         wav = get_white_noise(1, int(sr * duration)).unsqueeze(0)
-        wm = AudioSeal.get_pretrained(name="base")
+        wm = AudioSeal.get_pretrained(name="base", device="cpu")
 
         secret_message = torch.randint(0, 2, (1, 16), dtype=torch.int32)
         watermarked_wav = wm(wav, message=secret_message, sample_rate=sr, alpha=0.8)

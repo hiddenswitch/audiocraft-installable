@@ -18,8 +18,11 @@ Those functions also support loading from a remote location with the Torch Hub A
 They also support overriding some parameters, in particular the device and dtype
 of the returned model.
 """
-
+import collections
+import typing
 from pathlib import Path
+
+import omegaconf
 from huggingface_hub import hf_hub_download
 import typing as tp
 import os
@@ -38,10 +41,10 @@ def get_audiocraft_cache_dir() -> tp.Optional[str]:
 
 
 def _get_state_dict(
-    file_or_url_or_id: tp.Union[Path, str],
-    filename: tp.Optional[str] = None,
-    device='cpu',
-    cache_dir: tp.Optional[str] = None,
+        file_or_url_or_id: tp.Union[Path, str],
+        filename: tp.Optional[str] = None,
+        device='cpu',
+        cache_dir: tp.Optional[str] = None,
 ):
     if cache_dir is None:
         cache_dir = get_audiocraft_cache_dir()
@@ -68,7 +71,21 @@ def _get_state_dict(
             library_name="audiocraft",
             library_version=audiocraft.__version__,
         )
-        return torch.load(file, map_location=device)
+        with torch.serialization.safe_globals([
+            omegaconf.dictconfig.DictConfig,
+            omegaconf.base.ContainerMetadata,
+            typing.Any,
+            dict,
+            collections.defaultdict,
+            omegaconf.nodes.AnyNode,
+            omegaconf.base.Metadata,
+            omegaconf.listconfig.ListConfig,
+            list,
+            int,
+            str,
+            float
+        ]):
+            return torch.load(file, map_location=device)
 
 
 def load_compression_model_ckpt(file_or_url_or_id: tp.Union[Path, str], cache_dir: tp.Optional[str] = None):
@@ -76,9 +93,9 @@ def load_compression_model_ckpt(file_or_url_or_id: tp.Union[Path, str], cache_di
 
 
 def load_compression_model(
-    file_or_url_or_id: tp.Union[Path, str],
-    device="cpu",
-    cache_dir: tp.Optional[str] = None,
+        file_or_url_or_id: tp.Union[Path, str],
+        device="cpu",
+        cache_dir: tp.Optional[str] = None,
 ):
     pkg = load_compression_model_ckpt(file_or_url_or_id, cache_dir=cache_dir)
     if 'pretrained' in pkg:
@@ -204,12 +221,11 @@ def load_diffusion_models(file_or_url_or_id: tp.Union[Path, str],
 
 
 def load_audioseal_models(
-    file_or_url_or_id: tp.Union[Path, str],
-    device="cpu",
-    filename: tp.Optional[str] = None,
-    cache_dir: tp.Optional[str] = None,
+        file_or_url_or_id: tp.Union[Path, str],
+        device="cpu",
+        filename: tp.Optional[str] = None,
+        cache_dir: tp.Optional[str] = None,
 ):
-
     detector_ckpt = _get_state_dict(
         file_or_url_or_id,
         filename=f"detector_{filename}.pth",
@@ -217,7 +233,7 @@ def load_audioseal_models(
         cache_dir=cache_dir,
     )
     assert (
-        "model" in detector_ckpt
+            "model" in detector_ckpt
     ), f"No model state dict found in {file_or_url_or_id}/detector_{filename}.pth"
     detector_state = detector_ckpt["model"]
 
@@ -228,7 +244,7 @@ def load_audioseal_models(
         cache_dir=cache_dir,
     )
     assert (
-        "model" in generator_ckpt
+            "model" in generator_ckpt
     ), f"No model state dict found in {file_or_url_or_id}/generator_{filename}.pth"
     generator_state = generator_ckpt["model"]
 
