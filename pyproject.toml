@@ -39,6 +39,8 @@ dependencies = [
   "pesq",
   "pystoi",
   "torchdiffeq",
+  "descript-audio-codec",
+  "demucs",
 ]
 classifiers = [
   'License :: OSI Approved :: MIT License',
@@ -105,3 +107,17 @@ module = [
   "xformers.*",
 ]
 ignore_missing_imports = true
+
+[tool.uv]
+override-dependencies = [
+  "protobuf>=3",
+]
+dependency-metadata = [
+  # skip demucs torch requirements
+  { name = "demucs", version = "4.1.0a3", requires-dist = ["dora-search", "einops", "julius>=0.2.3", "lameenc>=1.2", "openunmix", "pyyaml"], requires-python = ">=3.9.0" },
+]
+
+[tool.uv.sources]
+demucs = [
+  { git = "https://github.com/adefossez/demucs.git" }
+]

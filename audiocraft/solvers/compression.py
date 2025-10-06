@@ -109,7 +109,7 @@ class CompressionSolver(base.StandardSolver):
 
         # adversarial losses
         for adv_name, adversary in self.adv_losses.items():
-            adv_loss, feat_loss = adversary(y_pred, y)
+            adv_loss, feat_loss = adversary.forward(y_pred, y)
             balanced_losses[f'adv_{adv_name}'] = adv_loss
             balanced_losses[f'feat_{adv_name}'] = feat_loss
 

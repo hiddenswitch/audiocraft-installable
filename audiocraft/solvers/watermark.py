@@ -418,7 +418,8 @@ class WatermarkSolver(base.StandardSolver):
             for batch in lp:
                 x = batch.to(self.device)
                 with torch.no_grad():
-                    message = random_message(self.model.nbits, x.shape[0])
+                    nbits = getattr(self.model, "nbits")
+                    message = random_message(nbits, x.shape[0])
                     watermark = self.model.get_watermark(x, message)
                     x_wm = x + watermark
                 y_pred = x_wm.cpu()
@@ -548,7 +549,8 @@ class WatermarkSolver(base.StandardSolver):
             reference, _ = batch
             reference = reference.to(self.device)
             with torch.no_grad():
-                message = random_message(self.model.nbits, reference.shape[0])
+                nbits = getattr(self.model, "nbits")
+                message = random_message(nbits, reference.shape[0])
                 watermark = self.model.get_watermark(reference, message)
                 x_wm = reference + watermark
 

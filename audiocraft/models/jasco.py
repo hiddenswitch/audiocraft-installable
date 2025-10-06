@@ -19,6 +19,7 @@ from .genmodel import BaseGenModel
 from .loaders import load_compression_model, load_jasco_model
 from ..data.audio_utils import convert_audio
 from ..modules.conditioners import WavCondition, ConditioningAttributes, SymbolicCondition, JascoCondConst
+from .encodec import EncodecModel
 
 
 class JASCO(BaseGenModel):
@@ -94,7 +95,8 @@ class JASCO(BaseGenModel):
 
         # unnormalize latents
         gen_latents = self._unnormalized_latents(gen_latents)
-        return self.compression_model.model.decoder(gen_latents.permute(0, 2, 1))
+        decoder = tp.cast(EncodecModel, self.compression_model).decoder
+        return decoder(gen_latents.permute(0, 2, 1))
 
     def _generate_tokens(self, attributes: tp.List[ConditioningAttributes],
                          prompt_tokens: tp.Optional[torch.Tensor], progress: bool = False) -> torch.Tensor:
@@ -187,10 +189,10 @@ class JASCO(BaseGenModel):
                     sample_rate=[self.sample_rate],
                     path=[None])
             else:
-                if JascoCondConst.DRM.value not in self.lm.condition_provider.conditioners:
+                if JascoCondConst.DRM.value not in tp.cast(tp.Any, self.lm).condition_provider.conditioners:
                     raise RuntimeError("This model doesn't support drums conditioning. ")
 
-                expected_length = self.lm.cfg.dataset.segment_duration * self.sample_rate
+                expected_length = int(tp.cast(tp.Any, self.lm).cfg.dataset.segment_duration * self.sample_rate)
                 # trim if needed
                 drums_wav = drums_wav[..., :expected_length]
 

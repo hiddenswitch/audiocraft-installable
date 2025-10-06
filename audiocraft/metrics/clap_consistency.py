@@ -44,6 +44,9 @@ class CLAPTextConsistencyMetric(TextConsistencyMetric):
 
     Model implementation & pre-trained checkpoints: https://github.com/LAION-AI/CLAP
     """
+    cosine_sum: torch.Tensor
+    weight: torch.Tensor
+
     def __init__(self, model_path: tp.Union[str, Path], model_arch: str = 'HTSAT-tiny', enable_fusion: bool = False):
         super().__init__()
         if laion_clap is None:
@@ -75,10 +78,10 @@ class CLAPTextConsistencyMetric(TextConsistencyMetric):
         text_embeddings = self.model.get_text_embedding(text, tokenizer=self._tokenizer, use_tensor=True)
         # cosine similarity between the text and the audio embedding
         cosine_sim = torch.nn.functional.cosine_similarity(audio_embeddings, text_embeddings, dim=1, eps=1e-8)
-        self.cosine_sum += cosine_sim.sum(dim=0)
-        self.weight += torch.tensor(cosine_sim.size(0))
+        self.cosine_sum = self.cosine_sum + cosine_sim.sum(dim=0)
+        self.weight = self.weight + torch.tensor(cosine_sim.size(0))
 
-    def compute(self):
+    def compute(self) -> float:
         """Computes the average cosine similarty across all audio/text pairs."""
-        assert self.weight.item() > 0, "Unable to compute with total number of comparisons <= 0"  # type: ignore
-        return (self.cosine_sum / self.weight).item()  # type: ignore
+        assert self.weight.item() > 0, "Unable to compute with total number of comparisons <= 0"
+        return (self.cosine_sum / self.weight).item()

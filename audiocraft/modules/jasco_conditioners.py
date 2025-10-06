@@ -10,6 +10,9 @@ from ..data.audio import audio_read
 from ..data.audio_utils import convert_audio
 from ..utils.autocast import TorchAutocast
 from ..utils.cache import EmbeddingCache
+from demucs import pretrained
+# requires demucs 4+
+from demucs.htdemucs import HTDemucs
 
 
 class MelodyConditioner(BaseConditioner):
@@ -76,7 +79,6 @@ class DrumsConditioner(WaveformConditioner):
             segment_duration (float, optional): duration in sec for each audio segment. Defaults to 10.0.
             device (tp.Union[torch.device, str], optional): device. Defaults to 'cpu'.
         """
-        from demucs import pretrained
         self.sample_rate = sample_rate
         self.__dict__['demucs'] = pretrained.get_model('htdemucs').to(device)
         stem_sources: list = self.demucs.sources  # type: ignore
@@ -104,9 +106,9 @@ class DrumsConditioner(WaveformConditioner):
         with self.autocast:
             wav = convert_audio(
                 wav, sample_rate, self.demucs.samplerate, self.demucs.audio_channels)  # type: ignore
-            stems = apply_model(self.demucs, wav, device=self.device)
+            stems = apply_model(tp.cast(HTDemucs, self.demucs), wav, device=self.device)
             drum_stem = stems[:, self.stem_idx]  # extract relevant stems for drums conditioning
-            return convert_audio(drum_stem, self.demucs.samplerate, self.sample_rate, 1)  # type: ignore
+            return convert_audio(drum_stem, self.demucs.samplerate, self.sample_rate, 1)
 
     def _temporal_blur(self, z: torch.Tensor):
         # z: (B, T, C)
@@ -260,41 +262,47 @@ class JascoConditioningProvider(ConditioningProvider):
         return output
 
     def _collate_symbolic(self, samples: tp.List[ConditioningAttributes],
-                          conditioner_keys: tp.Set) -> tp.Dict[str, SymbolicCondition]:
-        output = {}
+                          conditioner_keys: tp.AbstractSet[str]) -> tp.Dict[str, SymbolicCondition]:
+        output: tp.Dict[str, SymbolicCondition] = {}
 
         # collate if symbolic cond exists
-        if any(x in conditioner_keys for x in JascoCondConst.SYM.value):
+        if not conditioner_keys.intersection(JascoCondConst.SYM.value):
+            return output
 
+        for s in samples:
+            # hydrate with null chord if chords not exist - for inference support
+            chords_cond = s.symbolic.get(JascoCondConst.CRD.value)
+            if chords_cond is None or chords_cond.frame_chords is None or chords_cond.frame_chords.shape[-1] <= 1:
+                s.symbolic[JascoCondConst.CRD.value] = SymbolicCondition(
+                    frame_chords=torch.ones(self.sequence_len, dtype=torch.int32) * self.null_chord)
+
+            melody_cond = s.symbolic.get(JascoCondConst.MLD.value)
+            if melody_cond is None or melody_cond.melody is None or melody_cond.melody.shape[-1] <= 1:
+                s.symbolic[JascoCondConst.MLD.value] = SymbolicCondition(
+                    melody=torch.zeros((self.melody_dim, self.sequence_len)))
+
+        if JascoCondConst.CRD.value in conditioner_keys:
+            all_chords = []
             for s in samples:
-                # hydrate with null chord if chords not exist - for inference support
-                if (s.symbolic == {} or
-                        s.symbolic[JascoCondConst.CRD.value].frame_chords is None or
-                        s.symbolic[JascoCondConst.CRD.value].frame_chords.shape[-1] <= 1):  # type: ignore
-                    # no chords conditioning - fill with null chord token
-                    s.symbolic[JascoCondConst.CRD.value] = SymbolicCondition(
-                        frame_chords=torch.ones(self.sequence_len, dtype=torch.int32) * self.null_chord)
+                chords_cond = s.symbolic.get(JascoCondConst.CRD.value)
+                assert chords_cond is not None and chords_cond.frame_chords is not None
+                all_chords.append(chords_cond.frame_chords)
 
-                if (s.symbolic == {} or
-                        s.symbolic[JascoCondConst.MLD.value].melody is None or
-                        s.symbolic[JascoCondConst.MLD.value].melody.shape[-1] <= 1):  # type: ignore
-                    # no chords conditioning - fill with null chord token
-                    s.symbolic[JascoCondConst.MLD.value] = SymbolicCondition(
-                        melody=torch.zeros((self.melody_dim, self.sequence_len)))
-
-            if JascoCondConst.CRD.value in conditioner_keys:
-                # pad to max
-                max_seq_len = max(
-                    [s.symbolic[JascoCondConst.CRD.value].frame_chords.shape[-1] for s in samples])  # type: ignore
-                padded_chords = [
-                    torch.cat((x.symbolic[JascoCondConst.CRD.value].frame_chords,   # type: ignore
-                               torch.ones(max_seq_len -
-                                          x.symbolic[JascoCondConst.CRD.value].frame_chords.shape[-1],  # type: ignore
-                                          dtype=torch.int32) * self.null_chord))
-                    for x in samples
-                ]
+            max_seq_len = max([c.shape[-1] for c in all_chords]) if all_chords else 0
+            padded_chords = []
+            for c in all_chords:
+                padding = torch.ones(max_seq_len - c.shape[-1], dtype=torch.int32) * self.null_chord
+                padded_chords.append(torch.cat([c, padding]))
+            if padded_chords:
                 output[JascoCondConst.CRD.value] = SymbolicCondition(frame_chords=torch.stack(padded_chords))
-            if JascoCondConst.MLD.value in conditioner_keys:
-                melodies = torch.stack([x.symbolic[JascoCondConst.MLD.value].melody for x in samples])  # type: ignore
-                output[JascoCondConst.MLD.value] = SymbolicCondition(melody=melodies)
+
+        if JascoCondConst.MLD.value in conditioner_keys:
+            all_melodies = []
+            for s in samples:
+                melody_cond = s.symbolic.get(JascoCondConst.MLD.value)
+                assert melody_cond is not None and melody_cond.melody is not None
+                all_melodies.append(melody_cond.melody)
+            if all_melodies:
+                output[JascoCondConst.MLD.value] = SymbolicCondition(melody=torch.stack(all_melodies))
+
         return output

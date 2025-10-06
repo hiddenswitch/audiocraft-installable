@@ -206,18 +206,23 @@ def nullify_chords(sym_cond: SymbolicCondition, null_chord_idx: int = 194) -> Sy
     Returns:
         SymbolicCondition: A new symbolic condition with all frame chords set to the null chord index.
     """
-    return SymbolicCondition(frame_chords=torch.ones_like(sym_cond.frame_chords) * null_chord_idx)  # type: ignore
+    if sym_cond.frame_chords is None:
+        return sym_cond
+    new_frame_chords = torch.ones_like(sym_cond.frame_chords) * null_chord_idx
+    return sym_cond._replace(frame_chords=new_frame_chords)
 
 
 def nullify_melody(sym_cond: SymbolicCondition) -> SymbolicCondition:
     """Nullify the symbolic condition by replacing the melody matrix with zeros matrix.
     Args:
         sym_cond (SymbolicCondition): The symbolic condition containing frame chords to be nullified.
-        null_chord_idx (int, optional): The index to use for nullifying the chords. Defaults to 194 (Chordino).
     Returns:
         SymbolicCondition: A new symbolic condition with all frame chords set to the null chord index.
     """
-    return SymbolicCondition(melody=torch.zeros_like(sym_cond.melody))  # type: ignore
+    if sym_cond.melody is None:
+        return sym_cond
+    new_melody = torch.zeros_like(sym_cond.melody)
+    return sym_cond._replace(melody=new_melody)
 
 
 def _drop_description_condition(conditions: tp.List[ConditioningAttributes]) -> tp.List[ConditioningAttributes]:
@@ -627,7 +632,7 @@ class ChromaStemConditioner(WaveformConditioner):
             return None
 
         logger.info(f"Loading evaluation wavs from {path}")
-        from audiocraft.data.audio_dataset import AudioDataset
+        from ..data.audio_dataset import AudioDataset
         dataset: AudioDataset = AudioDataset.from_meta(
             path, segment_duration=self.duration, min_audio_duration=self.duration,
             sample_rate=self.sample_rate, channels=1)
@@ -1221,7 +1226,7 @@ class CLAPEmbeddingConditioner(JointEmbeddingConditioner):
         Returns:
             torch.Tensor: Single-item tensor of shape [F, D], F being the number of chunks, D the dimension.
         """
-        wav, sr = audio_read(path)  # [C, T]
+        wav, sr = audio_read(path)
         wav = wav.unsqueeze(0).to(self.device)  # [1, C, T]
         wav_len = torch.LongTensor([wav.shape[-1]]).to(self.device)
         embed = self._compute_wav_embedding(wav, wav_len, [sr], reduce_mean=False)  # [B, F, D]
@@ -1315,11 +1320,17 @@ def dropout_symbolic_conditions(sample: ConditioningAttributes,
     Raises:
         ValueError: If the specified condition is not present in the sample's symbolic attributes.
     """
-    if sample.symbolic == {} or sample.symbolic[JascoCondConst.CRD.value].frame_chords.shape[-1] <= 1:  # type: ignore
-        # nothing to drop
+    if not sample.symbolic:
         return sample
 
-    if condition not in getattr(sample, 'symbolic'):
+    sym_cond = sample.symbolic.get(condition)
+    if sym_cond is None:
+        return sample
+
+    if sym_cond.frame_chords is not None and sym_cond.frame_chords.shape[-1] <= 1:
+        return sample
+
+    if condition not in sample.symbolic:
         raise ValueError(
             "dropout_symbolic_condition received an unexpected condition!"
             f" expected {sample.symbolic.keys()}"
@@ -1362,7 +1373,11 @@ def dropout_condition(sample: ConditioningAttributes,
         embed = sample.joint_embed[condition]
         sample.joint_embed[condition] = nullify_joint_embed(embed)
     elif condition_type == 'symbolic':
-        sample = dropout_symbolic_conditions(sample=sample, condition=condition, **kwargs)
+        d_kwargs = {
+            k: v for k, v in kwargs.items()
+            if k in ['null_chord_idx']
+        }
+        sample = dropout_symbolic_conditions(sample=sample, condition=condition, **d_kwargs)
     else:
         sample.text[condition] = None
 

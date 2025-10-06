@@ -47,11 +47,17 @@ class AudioFileInfo:
 def _av_info(filepath: tp.Union[str, Path]) -> AudioFileInfo:
     _init_av()
     with av.open(str(filepath)) as af:
+        if not af.streams.audio:
+            raise ValueError(f"No audio stream in {filepath}")
         stream = af.streams.audio[0]
         sample_rate = stream.codec_context.sample_rate
-        duration = float(stream.duration * stream.time_base)
+        duration = 0.0
+        if stream.duration is not None and stream.time_base is not None:
+            duration = float(stream.duration * stream.time_base)
+        elif af.duration is not None:
+            duration = float(af.duration / 1_000_000)
         channels = stream.channels
-        return AudioFileInfo(sample_rate, duration, channels)
+    return AudioFileInfo(sample_rate, duration, channels)
 
 
 def _soundfile_info(filepath: tp.Union[str, Path]) -> AudioFileInfo:
@@ -88,10 +94,14 @@ def _av_read(filepath: tp.Union[str, Path], seek_time: float = 0, duration: floa
         frame_offset = int(sr * seek_time)
         # we need a small negative offset otherwise we get some edge artifact
         # from the mp3 decoder.
+        if stream.time_base is None:
+            raise ValueError("Cannot seek in stream with no time_base")
         af.seek(int(max(0, (seek_time - 0.1)) / stream.time_base), stream=stream)
         frames = []
         length = 0
         for frame in af.decode(streams=stream.index):
+            if not isinstance(frame, av.AudioFrame) or frame.pts is None or frame.time_base is None:
+                continue
             current_offset = int(frame.rate * frame.pts * frame.time_base)
             strip = max(0, frame_offset - current_offset)
             buf = torch.from_numpy(frame.to_ndarray())
@@ -110,7 +120,7 @@ def _av_read(filepath: tp.Union[str, Path], seek_time: float = 0, duration: floa
         assert wav.shape[0] == stream.channels
         if num_frames > 0:
             wav = wav[:, :num_frames]
-        return f32_pcm(wav), sr
+    return f32_pcm(wav), sr
 
 
 def audio_read(filepath: tp.Union[str, Path], seek_time: float = 0.,
@@ -349,3 +359,4 @@ def save_spectrograms(
         ax[i].label_outer()
     fig.savefig(path, bbox_inches="tight")
     plt.close()
+''

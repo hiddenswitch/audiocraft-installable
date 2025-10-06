@@ -29,6 +29,7 @@ import os
 
 from omegaconf import OmegaConf, DictConfig
 import torch
+from torch import nn
 
 import audiocraft
 
@@ -279,6 +280,8 @@ def load_audioseal_models(
     OmegaConf.resolve(cfg)
     model = builders.get_watermark_model(cfg)
 
+    assert isinstance(model.generator, nn.Module)
     model.generator.load_state_dict(generator_state)
+    assert isinstance(model.detector, nn.Module)
     model.detector.load_state_dict(detector_state)
     return model.to(device)

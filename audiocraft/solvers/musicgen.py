@@ -23,7 +23,7 @@ from ..data.audio_dataset import AudioDataset
 from ..data.music_dataset import MusicDataset, MusicInfo, AudioInfo
 from ..data.audio_utils import normalize_audio
 from ..modules.conditioners import JointEmbedCondition, SegmentWithAttributes, WavCondition, \
-            StyleConditioner, _drop_description_condition
+            StyleConditioner, _drop_description_condition, ChromaStemConditioner
 from ..utils.cache import CachedBatchWriter, CachedBatchLoader
 from ..utils.samples.manager import SampleManager
 from ..utils.utils import get_dataset_from_loader, is_jsonable, warn_once, model_hash
@@ -278,6 +278,7 @@ class MusicGenSolver(base.StandardSolver):
                 "This is inconsistent with how model were trained in the MusicGen paper. We removed the "
                 "`torch.no_grad()` in version 1.1.0. Small changes to the final performance are expected. "
                 "Really sorry about that.")
+        audio: tp.Optional[torch.Tensor]
         if self._cached_batch_loader is None or self.current_stage != "train":
             audio, infos = batch
             audio = audio.to(self.device)
@@ -322,6 +323,7 @@ class MusicGenSolver(base.StandardSolver):
             torch.cuda.set_sync_debug_mode("warn")
 
         if audio_tokens is None:
+            assert audio is not None
             audio_tokens = self._get_audio_tokens(audio)
 
         with self.autocast:
@@ -335,12 +337,13 @@ class MusicGenSolver(base.StandardSolver):
             padding_mask = padding_mask.clone()
             token_sample_rate = self.compression_model.frame_rate
             B, K, T_s = audio_tokens.shape
+            lm = tp.cast(models.LMModel, self.model)
             for i in range(B):
                 n_samples = infos[i].n_frames
                 audio_sample_rate = infos[i].sample_rate
                 # take the last token generated from actual audio frames (non-padded audio)
                 valid_tokens = math.floor(float(n_samples) / audio_sample_rate * token_sample_rate)
-                audio_tokens[i, :, valid_tokens:] = self.model.special_token_id
+                audio_tokens[i, :, valid_tokens:] = lm.special_token_id
                 padding_mask[i, :, valid_tokens:] = 0
 
         if self.device == "cuda" and check_synchronization_points:
@@ -413,7 +416,7 @@ class MusicGenSolver(base.StandardSolver):
                 self.scaler.unscale_(self.optimizer)
             if self.cfg.optim.max_norm:
                 if self.cfg.fsdp.use:
-                    metrics['grad_norm'] = self.model.clip_grad_norm_(self.cfg.optim.max_norm)  # type: ignore
+                    metrics['grad_norm'] = tp.cast(tp.Any, self.model).clip_grad_norm_(self.cfg.optim.max_norm)
                 else:
                     metrics['grad_norm'] = torch.nn.utils.clip_grad_norm_(
                         self.model.parameters(), self.cfg.optim.max_norm
@@ -654,14 +657,15 @@ class MusicGenSolver(base.StandardSolver):
             should_run_eval = True
         if self.cfg.evaluate.metrics.chroma_cosine:
             chroma_cosine = builders.get_chroma_cosine_similarity(self.cfg.metrics.chroma_cosine).to(self.device)
-            # if we have predefind wavs for chroma we should purge them for computing the cosine metric
-            has_predefined_eval_chromas = 'self_wav' in self.model.condition_provider.conditioners and \
-                                          self.model.condition_provider.conditioners['self_wav'].has_eval_wavs()
+            self_wav_cond = self.model.condition_provider.conditioners.get('self_wav')
+            has_predefined_eval_chromas = isinstance(self_wav_cond, ChromaStemConditioner) \
+                and self_wav_cond.has_eval_wavs()
             if has_predefined_eval_chromas:
+                chroma_cond = tp.cast(ChromaStemConditioner, self_wav_cond)
                 warn_once(self.logger, "Attempting to run cosine eval for config with pre-defined eval chromas! "
                                        'Resetting eval chromas to None for evaluation.')
-                eval_chroma_wavs = self.model.condition_provider.conditioners.self_wav.eval_wavs  # type: ignore
-                self.model.condition_provider.conditioners.self_wav.reset_eval_wavs(None)  # type: ignore
+                eval_chroma_wavs = chroma_cond.eval_wavs
+                chroma_cond.reset_eval_wavs(None)
             should_run_eval = True
 
         def get_compressed_audio(audio: torch.Tensor) -> torch.Tensor:
@@ -721,7 +725,9 @@ class MusicGenSolver(base.StandardSolver):
                     chroma_cosine.update(y_pred, y, sizes, sample_rates)
                     # restore chroma conditioner's eval chroma wavs
                     if eval_chroma_wavs is not None:
-                        self.model.condition_provider.conditioners['self_wav'].reset_eval_wavs(eval_chroma_wavs)
+                        self_wav_cond = self.model.condition_provider.conditioners.get('self_wav')
+                        chroma_cond = tp.cast(ChromaStemConditioner, self_wav_cond)
+                        chroma_cond.reset_eval_wavs(eval_chroma_wavs)
 
             flashy.distrib.barrier()
             if fad is not None:

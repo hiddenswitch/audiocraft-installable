@@ -104,8 +104,9 @@ def get_jasco_model(cfg: omegaconf.DictConfig,
         assert compression_model is not None
 
         # use compression model for drums conditioning
-        condition_provider.conditioners.self_wav.compression_model = compression_model
-        condition_provider.conditioners.self_wav.compression_model.requires_grad_(False)
+        drums_cond = tp.cast(DrumsConditioner, condition_provider.conditioners[JascoCondConst.DRM.value])
+        drums_cond.compression_model = compression_model
+        drums_cond.compression_model.requires_grad_(False)
 
     # downcast to jasco conditioning provider
     seq_len = cfg.compression_model_framerate * cfg.dataset.segment_duration

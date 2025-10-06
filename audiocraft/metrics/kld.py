@@ -59,6 +59,11 @@ class KLDivergenceMetric(torchmetrics.Metric):
     have similar acoustic characteristics as the reference audio,
     according to the classifier.
     """
+    kld_pq_sum: torch.Tensor
+    kld_qp_sum: torch.Tensor
+    kld_all_sum: torch.Tensor
+    weight: torch.Tensor
+
     def __init__(self):
         super().__init__()
         self.add_state("kld_pq_sum", default=torch.tensor(0.), dist_reduce_fx="sum")
@@ -97,18 +102,18 @@ class KLDivergenceMetric(torchmetrics.Metric):
             assert preds_probs.shape == targets_probs.shape
             kld_scores = kl_divergence(preds_probs, targets_probs)
             assert not torch.isnan(kld_scores).any(), "kld_scores contains NaN value(s)!"
-            self.kld_pq_sum += torch.sum(kld_scores)
+            self.kld_pq_sum = self.kld_pq_sum + torch.sum(kld_scores)
             kld_qp_scores = kl_divergence(targets_probs, preds_probs)
-            self.kld_qp_sum += torch.sum(kld_qp_scores)
-            self.weight += torch.tensor(kld_scores.size(0))
+            self.kld_qp_sum = self.kld_qp_sum + torch.sum(kld_qp_scores)
+            self.weight = self.weight + torch.tensor(kld_scores.size(0))
 
     def compute(self) -> dict:
         """Computes KL-Divergence across all evaluated pred/target pairs."""
-        weight: float = float(self.weight.item())  # type: ignore
+        weight: float = float(self.weight.item())
         assert weight > 0, "Unable to compute with total number of comparisons <= 0"
         logger.info(f"Computing KL divergence on a total of {weight} samples")
-        kld_pq = self.kld_pq_sum.item() / weight  # type: ignore
-        kld_qp = self.kld_qp_sum.item() / weight  # type: ignore
+        kld_pq = self.kld_pq_sum.item() / weight
+        kld_qp = self.kld_qp_sum.item() / weight
         kld_both = kld_pq + kld_qp
         return {'kld': kld_pq, 'kld_pq': kld_pq, 'kld_qp': kld_qp, 'kld_both': kld_both}
 
@@ -155,7 +160,6 @@ class PasstKLDivergenceMetric(KLDivergenceMetric):
                 from hear21passt.base import get_basic_model  # type: ignore
                 # Original PASST was trained on AudioSet with 10s-long audio samples
                 max_duration = 10
-            min_duration = 0.15
             min_duration = 0.15
         except ModuleNotFoundError:
             raise ModuleNotFoundError(

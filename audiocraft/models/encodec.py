@@ -263,7 +263,7 @@ class DAC(CompressionModel):
     def __init__(self, model_type: str = "44khz"):
         super().__init__()
         try:
-            import dac.utils
+            import dac.utils  # type: ignore
         except ImportError:
             raise RuntimeError("Could not import dac, make sure it is installed, "
                                "please run `pip install descript-audio-codec`")
@@ -344,7 +344,7 @@ class HFEncodecCompressionModel(CompressionModel):
     def encode(self, x: torch.Tensor) -> tp.Tuple[torch.Tensor, tp.Optional[torch.Tensor]]:
         bandwidth_index = self.possible_num_codebooks.index(self.num_codebooks)
         bandwidth = self.model.config.target_bandwidths[bandwidth_index]
-        res = self.model.encode(x, None, bandwidth)
+        res: tp.Tuple[tp.List[torch.Tensor], tp.List[torch.Tensor]] = self.model.encode(x, None, bandwidth)
         assert len(res[0]) == 1
         assert len(res[1]) == 1
         return res[0][0], res[1][0]
@@ -354,7 +354,7 @@ class HFEncodecCompressionModel(CompressionModel):
             scales = [None]  # type: ignore
         else:
             scales = scale  # type: ignore
-        res = self.model.decode(codes[None], scales)
+        res = self.model.decode(tp.cast(torch.LongTensor, codes[None].long()), scales)
         return res[0]
 
     def decode_latent(self, codes: torch.Tensor):

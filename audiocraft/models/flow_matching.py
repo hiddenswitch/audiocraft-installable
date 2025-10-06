@@ -4,29 +4,29 @@
 # This source code is licensed under the license found in the
 # LICENSE file in the root directory of this source tree.
 
-from dataclasses import dataclass
-from functools import partial
 import logging
 import math
 import typing as tp
+from dataclasses import dataclass
+from functools import partial
+
 import torch
 from torch import nn
 from torchdiffeq import odeint  # type: ignore
-from ..modules.streaming import StreamingModule
-from ..modules.transformer import create_norm_fn, StreamingTransformerLayer
-from ..modules.unet_transformer import UnetTransformer
+
+from .lm import ConditionTensors, init_layer
+from ..modules.activations import get_activation_fn
 from ..modules.conditioners import (
     ConditionFuser,
     ClassifierFreeGuidanceDropout,
     AttributeDropout,
     ConditioningAttributes,
-    JascoCondConst
+    JascoCondConst,
 )
 from ..modules.jasco_conditioners import JascoConditioningProvider
-from ..modules.activations import get_activation_fn
-
-from .lm import ConditionTensors, init_layer
-
+from ..modules.streaming import StreamingModule
+from ..modules.transformer import create_norm_fn, StreamingTransformerLayer
+from ..modules.unet_transformer import UnetTransformer
 
 logger = logging.getLogger(__name__)
 
@@ -313,10 +313,12 @@ class FlowMatchingModel(StreamingModule):
 
         # concat temporal conditions on the feature dimension
         temporal_conds = JascoCondConst.ALL.value
-        for cond in temporal_conds:
-            if cond not in condition_tensors:
+        for cond_key in temporal_conds:
+            condition = condition_tensors.get(cond_key)
+            if condition is None:
                 continue
-            c = self._align_seq_length(condition_tensors[cond][0], seq_len=T)
+            c, _ = condition
+            c = self._align_seq_length(c, seq_len=T)
             x = torch.concat((x, c), dim=-1)
 
         # project to transformer dimension
@@ -326,9 +328,13 @@ class FlowMatchingModel(StreamingModule):
 
         # embed time parameter
         t_embs = self._embed_time_parameter(t)
+        time_emb = self.temb_proj(t_embs[:, None, :])
 
         # add it to cross_attention_input
-        cross_attention_input = cross_attention_input + self.temb_proj(t_embs[:, None, :])
+        if cross_attention_input is not None:
+            cross_attention_input = cross_attention_input + time_emb
+        else:
+            cross_attention_input = time_emb
 
         out = self.transformer(input_, cross_attention_src=cross_attention_input)
 
@@ -337,8 +343,8 @@ class FlowMatchingModel(StreamingModule):
         v_theta = self.linear(out)  # [B, T, D]
 
         # remove the prefix from the model outputs
-        if len(self.fuser.fuse2cond['prepend']) > 0:
-            v_theta = v_theta[:, :, -T:]
+        if self.fuser.fuse2cond.get('prepend'):
+            v_theta = v_theta[:, -T:, :]
 
         return v_theta  # [B, T, D]
 

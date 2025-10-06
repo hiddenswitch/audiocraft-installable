@@ -58,11 +58,11 @@ class AudioSeal(WMModel):
         nbits: int = 0,
     ):
         super().__init__()
-        self.generator = generator  # type: ignore
-        self.detector = detector  # type: ignore
+        self.generator = generator
+        self.detector = detector
 
         # Allow to re-train an n-bit model with new 0-bit message
-        self.nbits = nbits if nbits else self.generator.msg_processor.nbits
+        self.nbits = nbits if nbits else tp.cast(tp.Any, self.generator).msg_processor.nbits
 
     def get_watermark(
         self,
@@ -70,7 +70,7 @@ class AudioSeal(WMModel):
         message: tp.Optional[torch.Tensor] = None,
         sample_rate: int = 16_000,
     ) -> torch.Tensor:
-        return self.generator.get_watermark(x, message=message, sample_rate=sample_rate)
+        return tp.cast(tp.Any, self.generator).get_watermark(x, message=message, sample_rate=sample_rate)
 
     def detect_watermark(self, x: torch.Tensor) -> torch.Tensor:
         """
@@ -85,7 +85,7 @@ class AudioSeal(WMModel):
         """
 
         # Getting the direct decoded message from the detector
-        result = self.detector.detector(x)  # b x 2+nbits
+        result = tp.cast(tp.Any, self.detector).detector(x)  # b x 2+nbits
         # hardcode softmax on 2 first units used for detection
         result[:, :2, :] = torch.softmax(result[:, :2, :], dim=1)
         return result

@@ -9,6 +9,7 @@ from . import builders, musicgen
 from einops import rearrange
 from torch.nn import functional as F
 from ..modules.conditioners import SegmentWithAttributes
+from .. import models
 
 import torch
 import numpy as np
@@ -201,9 +202,11 @@ class MagnetSolver(musicgen.MusicGenSolver):
         mask[:, stage, :] = stage_mask
 
         # Mask all codebooks larger than stage_
-        mask_id = self.model.special_token_id
+        lm = tp.cast(models.LMModel, self.model)
+        mask_id = lm.special_token_id
         mask[:, (stage_+1):, :] = torch.full((B, K - stage_ - 1, T), True, device=device)
-        input_tokens = torch.where(mask, mask_id, audio_tokens)
+        input_tokens = audio_tokens.clone()
+        input_tokens[mask] = mask_id
 
         # Take loss only on the chosen stage, and only on the masked tokens.
         loss_mask = torch.full((B, K, T), False, device=device)
@@ -242,7 +245,7 @@ class MagnetSolver(musicgen.MusicGenSolver):
                 self.scaler.unscale_(self.optimizer)
             if self.cfg.optim.max_norm:
                 if self.cfg.fsdp.use:
-                    metrics['grad_norm'] = self.model.clip_grad_norm_(self.cfg.optim.max_norm)  # type: ignore
+                    metrics['grad_norm'] = tp.cast(tp.Any, self.model).clip_grad_norm_(self.cfg.optim.max_norm)
                 else:
                     metrics['grad_norm'] = torch.nn.utils.clip_grad_norm_(
                         self.model.parameters(), self.cfg.optim.max_norm
