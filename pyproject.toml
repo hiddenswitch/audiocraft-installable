@@ -40,6 +40,7 @@ dependencies = [
   "pystoi",
   "torchdiffeq",
   "descript-audio-codec",
+  "descript-audiotools",
   "demucs",
 ]
 classifiers = [
@@ -109,15 +110,52 @@ module = [
 ignore_missing_imports = true
 
 [tool.uv]
-override-dependencies = [
-  "protobuf>=3",
-]
 dependency-metadata = [
   # skip demucs torch requirements
-  { name = "demucs", version = "4.1.0a3", requires-dist = ["dora-search", "einops", "julius>=0.2.3", "lameenc>=1.2", "openunmix", "pyyaml"], requires-python = ">=3.9.0" },
+  { name = "demucs", version = "4.1.0a3", requires-dist = [
+    "dora-search",
+    "einops",
+    "julius>=0.2.3",
+    "lameenc>=1.2",
+    "openunmix",
+    "pyyaml"
+  ], requires-python = ">=3.9.0" },
+  { name = "descript-audio-codec", version = "1.0.0", requires-dist = [
+    "argbind>=0.3.7",
+    "descript-audiotools==0.7.2",
+    "einops",
+    "numpy",
+    "torch",
+    "torchaudio",
+    "tqdm",
+  ] },
+  { name = "descript-audiotools", version = "0.7.2", requires-dist = [
+    "argbind",
+    "numpy",
+    "soundfile",
+    "pyloudnorm",
+    "importlib-resources",
+    "scipy",
+    "torch",
+    "julius",
+    "torchaudio",
+    "ffmpy",
+    "ipython",
+    "rich",
+    "matplotlib",
+    "librosa",
+    "pystoi",
+    "torch_stoi",
+    "flatten-dict",
+    "markdown2",
+    "randomname",
+    "protobuf>=3.19.6",
+    "tensorboard",
+    "tqdm",
+  ] },
 ]
 
 [tool.uv.sources]
-demucs = [
-  { git = "https://github.com/adefossez/demucs.git" }
-]
+demucs = { git = "https://github.com/hiddenswitch/demucs-installable.git" }
+descript-audio-codec = { git = "https://github.com/descriptinc/descript-audio-codec.git" }
+descript-audiotools = { git = "https://github.com/hiddenswitch/audiotools-installable.git" }
